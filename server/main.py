@@ -21,23 +21,27 @@ from dotenv import load_dotenv
 load_dotenv()
 # Fixed trailing space in model name
 llm = ChatOpenAI(
-    model="liquid/lfm-2.5-2.6b:free",
+    model=os.getenv("CHAT_MODEL"),
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("API_URL"),  # Or use os.getenv("OPENROUTER_API_KEY")
 )
 
 app = FastAPI()
 
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+origins = [
+    "http://localhost:3000",
+    os.getenv("FRONTEND_URL")  # <-- Now uses the correct environment variable
+]
+print(origins)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("frontend_url")],  # Use the FRONTEND_URL from .env
+    allow_origins=origins,  # <-- अब यह सही वेरिएबल इस्तेमाल करेगा
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 class ChatRequest(BaseModel):
     url: str
     text: str

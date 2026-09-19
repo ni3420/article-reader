@@ -1,81 +1,80 @@
 import os
-import requests
+import logging
 from dotenv import load_dotenv
-from langchain_core.embeddings import Embeddings
+from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from langchain_qdrant import QdrantVectorStore
 
-load_dotenv()  # Loads variables from your .env file
+# Configure production logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-API_URL = os.getenv("API_URL")
+# Load environment variables
+load_dotenv()
+
+OPENROUTER_API_KEY = os.getenv("API_URL")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "nvidia/nemotron-3-embed-1b:free")
 
+# Validate critical environment variables
+if not OPENROUTER_API_KEY or not QDRANT_URL or not QDRANT_API_KEY:
+    logger.error("Missing critical environment variables in the .env file.")
+    raise ValueError("Missing required environment variables (OPENROUTER_API_KEY, QDRANT_URL, QDRANT_API_KEY).")
 
-# Custom Embeddings wrapper using requests to avoid format mismatches
-class OpenRouterRequestsEmbeddings(Embeddings):
-    def __init__(self, model: str, api_key: str):
-        self.model = model
-        self.api_key = api_key
-        self.url = "https://openrouter.ai/api/v1/embeddings"
-
-    def _call_api(self, texts: list[str]) -> list[list[float]]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model,
-            "input": texts
-        }
-        response = requests.post(self.url, headers=headers, json=payload)
-        response.raise_for_status()
-        
-        result = response.json()
-        # Sort by index to maintain original document order
-        sorted_data = sorted(result["data"], key=lambda x: x["index"])
-        return [item["embedding"] for item in sorted_data]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._call_api(texts)
-
-    def embed_query(self, text: str) -> list[float]:
-        return self._call_api([text])[0]
-
-# Initialize custom OpenRouter embeddings with Nvidia Nemotron
-embeddings = OpenRouterRequestsEmbeddings(
-    model="nvidia/nemotron-3-embed-1b:free",  
-    api_key=API_URL
-)
-
-# Connect to Qdrant Cloud using URL and API Key
-client = QdrantClient(
-    url=QDRANT_URL,
-    api_key=QDRANT_API_KEY,
-)
-
-# Create collection if it doesn't exist
-if not client.collection_exists("test"):
-    client.create_collection(
-        collection_name="test",
-        vectors_config=models.VectorParams(
-            size=2048,  # nvidia/nemotron-3-embed-1b uses 2048 dimensions
-            distance=models.Distance.COSINE
-        )
+try:
+    # Initialize official OpenAI embeddings configured for OpenRouter
+    logger.info("Initializing embeddings client...")
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDINGS_MODEL,
+        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_base="https://openrouter.ai/api/v1",
+        check_embedding_ctx_length=False
     )
-    print("Collection 'test' created successfully on Qdrant Cloud with dimension 2048!")
-    
-client.create_payload_index(
-    collection_name="test",
-    field_name="metadata.source",
-    field_schema=models.PayloadSchemaType.KEYWORD
-)
-print("Payload index created for 'metadata.source'!")
 
-vector_store = QdrantVectorStore(
-    client=client,
-    collection_name="test",
-    embedding=embeddings,
-)
-print("Vector store initialized successfully with Qdrant Cloud!")
+    # Connect to Qdrant Cloud
+    logger.info("Connecting to Qdrant Cloud...")
+    client = QdrantClient(
+        url=QDRANT_URL,
+        api_key=QDRANT_API_KEY,
+    )
+
+    collection_name = "test"
+
+    # Create collection if it doesn't exist
+    if not client.collection_exists(collection_name):
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(
+                size=2048,  # nvidia/nemotron-3-embed-1b uses 2048 dimensions
+                distance=models.Distance.COSINE
+            )
+        )
+        logger.info(f"Collection '{collection_name}' created successfully on Qdrant Cloud!")
+
+    # Create payload index safely (handles cases where it already exists)
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="metadata.source",
+            field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        logger.info("Payload index created for 'metadata.source'.")
+    except Exception as index_err:
+        logger.warning(f"Payload index might already exist or failed to create: {index_err}")
+
+    # Initialize Qdrant Vector Store
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name=collection_name,
+        embedding=embeddings,
+    )
+    logger.info("Vector store initialized successfully with Qdrant Cloud!")
+
+except Exception as e:
+    logger.critical(f"Failed to initialize vector store pipeline: {e}")
+    raise e
