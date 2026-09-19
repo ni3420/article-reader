@@ -11,7 +11,7 @@ from pydantic import BaseModel
 import trafilatura
 from bs4 import BeautifulSoup
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from src.lib.vector import vector_store
+from vector import vector_store
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
